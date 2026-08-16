@@ -58,9 +58,6 @@ export class MxFilament extends Base {
         input { display:block; width:100%; box-sizing:border-box; margin-top:3px; padding:8px 10px;
                 border:1px solid var(--mx-border,#e5e7eb); border-radius:8px; font:inherit; color:var(--mx-text,#111827); }
         input:focus { outline:2px solid var(--mx-accent,#16a34a); outline-offset:-1px; }
-        .add { margin-top:10px; padding:8px 12px; border:1px solid var(--mx-border,#e5e7eb);
-               background:#fff; border-radius:8px; cursor:pointer; font:inherit; color:var(--mx-text,#111827); }
-        .add:hover { border-color:var(--mx-accent,#16a34a); color:var(--mx-accent,#16a34a); }
       </style>
       <h2>🧵 ${t('filament')}</h2>
       <label>${t('brand')}
@@ -77,7 +74,6 @@ export class MxFilament extends Base {
       <label>${t('note')}
         <input class="f note" placeholder="220–240 °C">
       </label>
-      <button class="add">＋ ${t('batchAdd')}</button>
     `;
     this._inputs = {
       brand: this.shadowRoot.querySelector('.brand'),
@@ -88,9 +84,6 @@ export class MxFilament extends Base {
     for (const k of Object.keys(this._inputs)) {
       this._inputs[k].addEventListener('input', () => this._fromInput());
     }
-    this.shadowRoot.querySelector('.add').addEventListener('click', () => {
-      emit(this, 'mx:addCatalog', { item: this._read() });
-    });
     this._syncInputs();
   }
 

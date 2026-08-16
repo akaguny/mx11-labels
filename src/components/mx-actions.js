@@ -2,7 +2,7 @@
 import { t } from '../core/i18n.js';
 import { renderLabel, canvasToRows, composeName } from '../core/label.js';
 import { buildPrintJob, PX_PER_MM } from '../core/protocol.js';
-import { clamp, Base, defineEl } from './util.js';
+import { clamp, MAX_BATCH, Base, defineEl } from './util.js';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -163,38 +163,56 @@ export class MxActions extends Base {
     const copies = clamp(+s.copies || 1, 1, 10);
     const finalFeed = Math.max(1, Math.round((+s.tear || 0) * PX_PER_MM));
 
-    // --- Серия: каждая наклейка отправляется отдельно с паузой (паттерн v14) ---
+    // --- Серия: наклейки печатаются отдельными заданиями; очередь делится на пачки по MAX_BATCH с отрывом между ними ---
     if (this._queue && this._queue.length) {
+      const chunks = [];
+      for (let i = 0; i < this._queue.length; i += MAX_BATCH) chunks.push(this._queue.slice(i, i + MAX_BATCH));
       const labels = this._queue.map(item => ({ rows: this._rowsFor(item, s), copies }));
       const total = labels.reduce((a, l) => a + l.copies, 0);
       let printed = 0;
+      let ok = false;
       this._setBusy(true);
-      this._log(`Печать серии: ${this._queue.length} наклеек × ${copies} копий = ${total} шт`);
+      this._log(`Печать серии: ${this._queue.length} наклеек × ${copies} копий = ${total} шт (пачки по ${MAX_BATCH})`);
       try {
-        for (const label of labels) {
-          for (let c = 0; c < label.copies; c++) {
-            printed++;
-            const isLast = printed === total;
-            const bytes = buildPrintJob(label.rows, energy, isLast ? finalFeed : 1, isLast);
-            this._setStatus(t('printingN', printed, total));
-            if (this._progress) this._progress.value = Math.round((printed - 1) / total * 100);
-            await this._printer.print(bytes, frac => {
-              if (this._progress) this._progress.value = Math.round(((printed - 1) + frac) / total * 100);
-            });
-            if (!isLast) await sleep(400);   // даём принтеру освободить буфер (как v14)
+        for (let ci = 0; ci < chunks.length; ci++) {
+          const chunk = chunks[ci];
+          const isLastChunk = ci === chunks.length - 1;
+          const chunkNote = chunks.length > 1 ? t('batchChunk', ci + 1, chunks.length) : '';
+          const chunkTotal = chunk.reduce((a, item) => a + labels[this._queue.indexOf(item)].copies, 0);
+          let chunkPrinted = 0;
+          for (const item of chunk) {
+            const label = labels[this._queue.indexOf(item)];
+            for (let c = 0; c < label.copies; c++) {
+              printed++;
+              chunkPrinted++;
+              const isChunkLast = chunkPrinted === chunkTotal;
+              const bytes = buildPrintJob(label.rows, energy, isChunkLast ? finalFeed : 1, isChunkLast);
+              this._setStatus((chunkNote ? chunkNote + ' · ' : '') + t('printingN', printed, total));
+              if (this._progress) this._progress.value = Math.round((printed - 1) / total * 100);
+              await this._printer.print(bytes, frac => {
+                if (this._progress) this._progress.value = Math.round(((printed - 1) + frac) / total * 100);
+              });
+              if (!isChunkLast) await sleep(400);   // даём принтеру освободить буфер (как v14)
+            }
           }
+          if (!isLastChunk) await sleep(1500);      // между пачками: ленту можно оторвать, принтеру дать выдохнуть
         }
         if (this._progress) this._progress.value = 100;
         this._setStatus(t('doneTear'));
+        ok = true;
       } catch (err) {
         this._setStatus(t('printError') + ((err && err.message) || err), true);
       } finally {
         this._setBusy(false);
       }
-      for (const item of this._queue) {
-        if (typeof this.dispatchEvent === 'function' && typeof CustomEvent !== 'undefined') {
-          this.dispatchEvent(new CustomEvent('mx:history', {
-            detail: { name: composeName(item), copies }, bubbles: true, composed: true }));
+      if (ok) {
+        for (const item of this._queue) {
+          if (typeof this.dispatchEvent === 'function' && typeof CustomEvent !== 'undefined') {
+            this.dispatchEvent(new CustomEvent('mx:history', {
+              detail: { name: composeName(item), copies,
+                        item: { brand: item.brand || '', type: item.type || '', color: item.color || '', note: item.note || '' } },
+              bubbles: true, composed: true }));
+          }
         }
       }
       return;
@@ -205,10 +223,13 @@ export class MxActions extends Base {
     const rows = this._rowsFor(this._filament, s);
     const bytes = buildPrintJob(rows, energy, finalFeed, true);
     this._log(`Печать одиночной: ${name} × ${copies}, ${bytes.length} байт`);
-    await this._send(bytes, copies);
-    if (typeof this.dispatchEvent === 'function' && typeof CustomEvent !== 'undefined') {
+    const ok = await this._send(bytes, copies);
+    if (ok && typeof this.dispatchEvent === 'function' && typeof CustomEvent !== 'undefined') {
+      const f = this._filament || {};
       this.dispatchEvent(new CustomEvent('mx:history', {
-        detail: { name, copies }, bubbles: true, composed: true }));
+        detail: { name, copies,
+                  item: { brand: f.brand || '', type: f.type || '', color: f.color || '', note: f.note || '' } },
+        bubbles: true, composed: true }));
     }
   }
 
@@ -220,10 +241,12 @@ export class MxActions extends Base {
     const bytes = buildPrintJob(rows, clamp(+s.energy || 100, 30, 100),
       Math.max(1, Math.round((+s.tear || 0) * PX_PER_MM)), true);
     this._log(`Печать из каталога: ${composeName(item)} × ${copies}, ${bytes.length} байт`);
-    await this._send(bytes, copies);
-    if (typeof this.dispatchEvent === 'function' && typeof CustomEvent !== 'undefined') {
+    const ok = await this._send(bytes, copies);
+    if (ok && typeof this.dispatchEvent === 'function' && typeof CustomEvent !== 'undefined') {
       this.dispatchEvent(new CustomEvent('mx:history', {
-        detail: { name: composeName(item), copies }, bubbles: true, composed: true }));
+        detail: { name: composeName(item), copies,
+                  item: { brand: item.brand || '', type: item.type || '', color: item.color || '', note: item.note || '' } },
+        bubbles: true, composed: true }));
     }
   }
 
@@ -243,8 +266,8 @@ export class MxActions extends Base {
     return this._printer.print(bytes, frac => {
       if (this._progress) this._progress.value = Math.round(frac * 100);
     })
-      .then(() => { if (this._progress) this._progress.value = 100; this._setStatus(t('doneTear')); })
-      .catch(err => this._setStatus(t('printError') + ((err && err.message) || err), true))
+      .then(() => { if (this._progress) this._progress.value = 100; this._setStatus(t('doneTear')); return true; })
+      .catch(err => { this._setStatus(t('printError') + ((err && err.message) || err), true); return false; })
       .finally(() => this._setBusy(false));
   }
 

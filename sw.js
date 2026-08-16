@@ -1,5 +1,5 @@
 /* mx11-labels service worker — cache-first для статики, network-first для навигации */
-const VERSION = 'mx11-v2';
+const VERSION = 'mx11-v3';
 const CACHE = VERSION;
 
 const PRECACHE = [

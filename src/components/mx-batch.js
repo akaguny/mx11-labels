@@ -1,7 +1,7 @@
 // ===== mx-batch: пакетная печать — разбор строк, очередь карточек =====
 import { t } from '../core/i18n.js';
 import { composeName } from '../core/label.js';
-import { esc, emit, Base, defineEl } from './util.js';
+import { esc, emit, MAX_BATCH, Base, defineEl } from './util.js';
 
 export class MxBatch extends Base {
   constructor() {
@@ -42,7 +42,7 @@ export class MxBatch extends Base {
         :host { display:block; background:var(--mx-card-bg,#fff); border-radius:var(--mx-radius,14px);
                 padding:14px; margin:10px 0; box-shadow:0 1px 2px rgba(0,0,0,.06); }
         h2 { margin:0 0 8px; font-size:15px; }
-        .hint, .series, .count { font-size:12px; color:var(--mx-muted,#6b7280); margin:4px 0; }
+        .hint, .series, .count, .batch-note { font-size:12px; color:var(--mx-muted,#6b7280); margin:4px 0; }
         textarea { width:100%; box-sizing:border-box; padding:8px 10px; border:1px solid var(--mx-border,#e5e7eb);
                    border-radius:8px; font:inherit; color:var(--mx-text,#111827); resize:vertical; }
         textarea:focus { outline:2px solid var(--mx-accent,#16a34a); outline-offset:-1px; }
@@ -68,6 +68,7 @@ export class MxBatch extends Base {
         <button class="clear">${t('batchClear')}</button>
       </div>
       <p class="count"></p>
+      <p class="batch-note"></p>
       <p class="series">${t('batchSeries')}</p>
       <div class="cards"></div>
     `;
@@ -77,6 +78,7 @@ export class MxBatch extends Base {
     this.shadowRoot.querySelector('.parse').addEventListener('click', () => this._parse());
     this.shadowRoot.querySelector('.clear').addEventListener('click', () => this._clear());
     this._countEl = this.shadowRoot.querySelector('.count');
+    this._noteEl = this.shadowRoot.querySelector('.batch-note');
     this._cardsEl = this.shadowRoot.querySelector('.cards');
     this._renderCards();
   }
@@ -109,6 +111,9 @@ export class MxBatch extends Base {
     const q = this._queue || [];
     if (!this._countEl) return;
     this._countEl.textContent = t('batchCount', q.length);
+    if (this._noteEl) {
+      this._noteEl.textContent = q.length > MAX_BATCH ? t('batchLimitNote', MAX_BATCH) : '';
+    }
     if (!q.length) {
       this._cardsEl.innerHTML = `<p class="empty">${t('batchEmpty')}</p>`;
       return;

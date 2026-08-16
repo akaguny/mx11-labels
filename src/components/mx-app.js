@@ -205,6 +205,9 @@ export class MxApp extends Base {
 
   _onHistory(detail) {
     if (typeof addHistoryEntry === 'function') addHistoryEntry(detail || {});
+    if (detail && detail.name && detail.item && typeof upsertCatalogItem === 'function') {
+      upsertCatalogItem(detail.item);
+    }
     this._c.refresh();
   }
 

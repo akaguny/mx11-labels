@@ -15,6 +15,9 @@ export function clamp(n, lo, hi) {
   return Math.min(hi, Math.max(lo, n));
 }
 
+// Максимум наклеек в одной пачке печати (серия делится на пачки с отрывом между ними).
+export const MAX_BATCH = 10;
+
 // Безопасная база для классов, чтобы модули импортировались без DOM (node-проверки).
 export const Base = (typeof HTMLElement !== 'undefined') ? HTMLElement : class {};
 
