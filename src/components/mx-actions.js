@@ -169,6 +169,18 @@ export class MxActions extends Base {
       for (let i = 0; i < this._queue.length; i += MAX_BATCH) chunks.push(this._queue.slice(i, i + MAX_BATCH));
       const labels = this._queue.map(item => ({ rows: this._rowsFor(item, s), copies }));
       const total = labels.reduce((a, l) => a + l.copies, 0);
+      // Прогресс по времени: принтер печатает ~40 строк/с (5 мм/с при плотности
+      // 100%), отправка идёт в том же темпе — бар отражает реальное продвижение
+      // ленты, а не скорость BLE-записи (раньше он обгонял печать на ~40%).
+      const ROWS_PER_SEC = 40;
+      const totalRows = labels.reduce((s, l) => s + l.rows.length * l.copies, 0)
+        + (total > 0 ? (total - 1) * 2 : 0)          // линии отреза между наклейками
+        + Math.max(1, Math.round((+s.tear || 0) * PX_PER_MM)); // финальная протяжка
+      const printMs = Math.max(1000, Math.round(totalRows / ROWS_PER_SEC * 1000));
+      const startedAt = Date.now();
+      const progTimer = setInterval(() => {
+        if (this._progress) this._progress.value = Math.min(99.5, Math.round((Date.now() - startedAt) / printMs * 1000) / 10);
+      }, 500);
       let printed = 0;
       let ok = false;
       this._setBusy(true);
@@ -191,26 +203,25 @@ export class MxActions extends Base {
               const rows = printed === total ? label.rows : [...label.rows, ...cutMarkRows()];
               const bytes = buildPrintJob(rows, energy, isChunkLast ? finalFeed : 1, isChunkLast);
               this._setStatus((chunkNote ? chunkNote + ' · ' : '') + t('printingN', printed, total));
-              if (this._progress) this._progress.value = Math.round((printed - 1) / total * 100);
-              await this._printer.print(bytes, frac => {
-                if (this._progress) this._progress.value = Math.round(((printed - 1) + frac) / total * 100);
-              });
+              await this._printer.print(bytes);
               // Пауза между наклейками: принтер должен допечатать предыдущую
               // и освободить буфер, иначе преамбула следующего задания теряется
-              // (было 400 мс — на 3+ наклейках наклейки сливались/обрезались;
-              // при медленном темпе 1.4 КБ/с к концу записи принтер допечатывает
-              // почти всё, 2 с — запас на хвост и механику).
+              // (при темпе записи = печати хвост допечатывается за <1 с, 2 с — запас).
               if (!isChunkLast) await sleep(2000);
             }
           }
           if (!isLastChunk) await sleep(1500);      // между пачками: ленту можно оторвать, принтеру дать выдохнуть
         }
+        // даём принтеру допечатать хвост (буфер + финальная протяжка)
+        const remain = printMs + 1500 - (Date.now() - startedAt);
+        if (remain > 0) await sleep(remain);
         if (this._progress) this._progress.value = 100;
         this._setStatus(t('doneTear'));
         ok = true;
       } catch (err) {
         this._setStatus(t('printError') + ((err && err.message) || err), true);
       } finally {
+        clearInterval(progTimer);
         this._setBusy(false);
       }
       if (ok) {
@@ -231,7 +242,7 @@ export class MxActions extends Base {
     const rows = this._rowsFor(this._filament, s);
     const bytes = buildPrintJob(rows, energy, finalFeed, true);
     this._log(`Печать одиночной: ${name} × ${copies}, ${bytes.length} байт`);
-    const ok = await this._send(bytes, copies);
+    const ok = await this._send(bytes, copies, rows.length);
     if (ok && typeof this.dispatchEvent === 'function' && typeof CustomEvent !== 'undefined') {
       const f = this._filament || {};
       this.dispatchEvent(new CustomEvent('mx:history', {
@@ -249,7 +260,7 @@ export class MxActions extends Base {
     const bytes = buildPrintJob(rows, clamp(+s.energy || 100, 30, 100),
       Math.max(1, Math.round((+s.tear || 0) * PX_PER_MM)), true);
     this._log(`Печать из каталога: ${composeName(item)} × ${copies}, ${bytes.length} байт`);
-    const ok = await this._send(bytes, copies);
+    const ok = await this._send(bytes, copies, rows.length);
     if (ok && typeof this.dispatchEvent === 'function' && typeof CustomEvent !== 'undefined') {
       this.dispatchEvent(new CustomEvent('mx:history', {
         detail: { name: composeName(item), copies,
@@ -267,16 +278,28 @@ export class MxActions extends Base {
     return canvasToRows(c, s.orient, s.offmm);
   }
 
-  _send(bytes, total) {
+  _send(bytes, total, rowsPerCopy) {
     this._setStatus(t('printingN', 1, total));
     this._setBusy(true);
     if (this._progress) this._progress.value = 0;
-    return this._printer.print(bytes, frac => {
-      if (this._progress) this._progress.value = Math.round(frac * 100);
-    })
-      .then(() => { if (this._progress) this._progress.value = 100; this._setStatus(t('doneTear')); return true; })
+    // Прогресс по времени печати (~40 строк/с при плотности 100%), как в серии.
+    const ROWS_PER_SEC = 40;
+    const printMs = Math.max(1000, Math.round((rowsPerCopy || 1) * Math.max(1, total || 1) / ROWS_PER_SEC * 1000));
+    const startedAt = Date.now();
+    const timer = setInterval(() => {
+      if (this._progress) this._progress.value = Math.min(99.5, Math.round((Date.now() - startedAt) / printMs * 1000) / 10);
+    }, 500);
+    return this._printer.print(bytes)
+      .then(async () => {
+        // даём принтеру допечатать хвост (буфер + финальная протяжка)
+        const remain = printMs + 1000 - (Date.now() - startedAt);
+        if (remain > 0) await sleep(remain);
+        if (this._progress) this._progress.value = 100;
+        this._setStatus(t('doneTear'));
+        return true;
+      })
       .catch(err => { this._setStatus(t('printError') + ((err && err.message) || err), true); return false; })
-      .finally(() => this._setBusy(false));
+      .finally(() => { clearInterval(timer); this._setBusy(false); });
   }
 
   async feed() {
