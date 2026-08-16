@@ -1,8 +1,10 @@
 // ===== mx-actions: подключение, печать (одиночная и серия), протяжка, PNG, статусы =====
 import { t } from '../core/i18n.js';
 import { renderLabel, canvasToRows, composeName } from '../core/label.js';
-import { buildPrintJob, buildBatchJob, PX_PER_MM } from '../core/protocol.js';
+import { buildPrintJob, PX_PER_MM } from '../core/protocol.js';
 import { clamp, Base, defineEl } from './util.js';
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 export class MxActions extends Base {
   constructor() {
@@ -44,6 +46,11 @@ export class MxActions extends Base {
       p.onStatus((key) => {
         const map = { no_paper: t('noPaper'), overheat: t('overheat'), low_battery: t('lowBattery') };
         this._setStatus(map[key] || key);
+      });
+      p.onDisconnected(() => {
+        this._setStatus(t('printerDisconnected'), true);
+        this._syncDisabled();
+        this._emitPrinterState();
       });
     }
   }
@@ -156,11 +163,34 @@ export class MxActions extends Base {
     const copies = clamp(+s.copies || 1, 1, 10);
     const finalFeed = Math.max(1, Math.round((+s.tear || 0) * PX_PER_MM));
 
+    // --- Серия: каждая наклейка отправляется отдельно с паузой (паттерн v14) ---
     if (this._queue && this._queue.length) {
       const labels = this._queue.map(item => ({ rows: this._rowsFor(item, s), copies }));
-      const bytes = buildBatchJob(labels, energy, finalFeed);
-      this._log(`Печать серии: ${this._queue.length} наклеек × ${copies} копий, ${bytes.length} байт`);
-      await this._send(bytes, labels.reduce((a, l) => a + l.copies, 0));
+      const total = labels.reduce((a, l) => a + l.copies, 0);
+      let printed = 0;
+      this._setBusy(true);
+      this._log(`Печать серии: ${this._queue.length} наклеек × ${copies} копий = ${total} шт`);
+      try {
+        for (const label of labels) {
+          for (let c = 0; c < label.copies; c++) {
+            printed++;
+            const isLast = printed === total;
+            const bytes = buildPrintJob(label.rows, energy, isLast ? finalFeed : 1, isLast);
+            this._setStatus(t('printingN', printed, total));
+            if (this._progress) this._progress.value = Math.round((printed - 1) / total * 100);
+            await this._printer.print(bytes, frac => {
+              if (this._progress) this._progress.value = Math.round(((printed - 1) + frac) / total * 100);
+            });
+            if (!isLast) await sleep(400);   // даём принтеру освободить буфер (как v14)
+          }
+        }
+        if (this._progress) this._progress.value = 100;
+        this._setStatus(t('doneTear'));
+      } catch (err) {
+        this._setStatus(t('printError') + ((err && err.message) || err), true);
+      } finally {
+        this._setBusy(false);
+      }
       for (const item of this._queue) {
         if (typeof this.dispatchEvent === 'function' && typeof CustomEvent !== 'undefined') {
           this.dispatchEvent(new CustomEvent('mx:history', {

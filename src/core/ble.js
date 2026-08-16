@@ -41,6 +41,7 @@ export class MxPrinter {
     this.canWriteNoResp = false;
     this.connected = false;
     this._rxListeners = [];
+    this._disconnectListeners = [];
   }
 
   get isConnected() { return this.connected; }
@@ -61,6 +62,7 @@ export class MxPrinter {
     this.device.addEventListener('gattserverdisconnected', () => {
       this.connected = false;
       this.log('принтер отключился');
+      this._disconnectListeners.forEach(fn => { try { fn(); } catch (_) {} });
     });
     // Повтор только пока Chrome не пометил устройство «вне зоны»
     let lastErr = null;
@@ -152,6 +154,8 @@ export class MxPrinter {
   }
 
   onStatus(fn) { this._rxListeners.push(fn); }
+
+  onDisconnected(fn) { this._disconnectListeners.push(fn); }
 
   async _write(data, onProgress) {
     if (!this.tx) throw new Error('принтер не подключён');
