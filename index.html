@@ -4,6 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ctext y='13' font-size='13'%3E🏷️%3C/text%3E%3C/svg%3E">
+<link rel="manifest" href="./manifest.webmanifest">
+<meta name="theme-color" content="#16a34a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="MX11-наклейки">
+<link rel="apple-touch-icon" href="icon-192.png">
 <title>Наклейки для образцов филамента</title>
 <style>
   :root {
@@ -23,5 +29,12 @@
 <body>
   <mx-app></mx-app>
   <script type="module" src="src/components/mx-app.js"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', function () {
+        navigator.serviceWorker.register('./sw.js');
+      });
+    }
+  </script>
 </body>
 </html>
