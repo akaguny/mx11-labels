@@ -1,7 +1,7 @@
 // ===== mx-actions: подключение, печать (одиночная и серия), протяжка, PNG, статусы =====
 import { t } from '../core/i18n.js';
 import { renderLabel, canvasToRows, composeName } from '../core/label.js';
-import { buildPrintJob, PX_PER_MM } from '../core/protocol.js';
+import { buildPrintJob, cutMarkRows, PX_PER_MM } from '../core/protocol.js';
 import { clamp, MAX_BATCH, Base, defineEl } from './util.js';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -112,7 +112,7 @@ export class MxActions extends Base {
 
   _setBusy(b) {
     this._busy = b;
-    if (this._progress) this._progress.value = 0;
+    if (this._progress && b) this._progress.value = 0;
     this._syncDisabled();
   }
 
@@ -186,7 +186,10 @@ export class MxActions extends Base {
               printed++;
               chunkPrinted++;
               const isChunkLast = chunkPrinted === chunkTotal;
-              const bytes = buildPrintJob(label.rows, energy, isChunkLast ? finalFeed : 1, isChunkLast);
+              // Между наклейками (кроме самой последней в серии) печатаем тонкую
+              // линию отреза — иначе вплотную напечатанные рамки сливаются в одну.
+              const rows = printed === total ? label.rows : [...label.rows, ...cutMarkRows()];
+              const bytes = buildPrintJob(rows, energy, isChunkLast ? finalFeed : 1, isChunkLast);
               this._setStatus((chunkNote ? chunkNote + ' · ' : '') + t('printingN', printed, total));
               if (this._progress) this._progress.value = Math.round((printed - 1) / total * 100);
               await this._printer.print(bytes, frac => {
@@ -281,6 +284,51 @@ export class MxActions extends Base {
 
   downloadPng() {
     const s = this._settings || {};
+    const q = this._queue || [];
+    if (q.length) {
+      // Серия: один длинный PNG со всеми наклейками встык и линиями отреза между ними.
+      const items = [];
+      const copies = clamp(+s.copies || 1, 1, 10);
+      for (const item of q) for (let c = 0; c < copies; c++) items.push(item);
+      const tmp = document.createElement('canvas');
+      const W = Math.max(...items.map(it => {
+        const t = document.createElement('canvas');
+        renderLabel(t, {
+          brand: it.brand || '', type: it.type || '', color: it.color || '', note: it.note || '',
+          wMm: s.wmm, hMm: s.hmm, orient: s.orient, offMm: s.offmm, border: s.border,
+        });
+        return t.width;
+      }));
+      const H = items.reduce((sum, it, i) => {
+        const t = document.createElement('canvas');
+        renderLabel(t, {
+          brand: it.brand || '', type: it.type || '', color: it.color || '', note: it.note || '',
+          wMm: s.wmm, hMm: s.hmm, orient: s.orient, offMm: s.offmm, border: s.border,
+        });
+        return sum + t.height + (i < items.length - 1 ? 2 : 0);   // 2px линия отреза
+      }, 0);
+      tmp.width = W; tmp.height = H;
+      const ctx = tmp.getContext('2d');
+      ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H);
+      let y = 0;
+      items.forEach((it, i) => {
+        const t = document.createElement('canvas');
+        renderLabel(t, {
+          brand: it.brand || '', type: it.type || '', color: it.color || '', note: it.note || '',
+          wMm: s.wmm, hMm: s.hmm, orient: s.orient, offMm: s.offmm, border: s.border,
+        });
+        ctx.drawImage(t, 0, y);
+        y += t.height;
+        if (i < items.length - 1) { ctx.fillStyle = '#000'; ctx.fillRect(0, y, W, 2); y += 2; }
+      });
+      const name = composeName(q[0]).toLowerCase().replace(/[^a-z0-9а-яё]+/gi, '_') || 'series';
+      const a = document.createElement('a');
+      a.download = name + '_series.png';
+      a.href = tmp.toDataURL('image/png');
+      a.click();
+      this._log(`PNG серии (${items.length} наклеек) скачан`);
+      return;
+    }
     const f = this._filament || {};
     const name = composeName(f);
     if (!name) { this._setStatus(t('fillName'), true); return; }

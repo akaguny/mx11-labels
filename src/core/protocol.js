@@ -53,6 +53,13 @@ export function cmdFeedPaper(lines) {
   return a;
 }
 
+// Тонкая линия отреза между наклейками серии: n строк растра, все точки чёрные.
+// 2 строки = 0.25 мм — хорошо видно, почти не тратит ленту.
+export function cutMarkRows(n = 2) {
+  const row = new Array(PRINT_WIDTH).fill(1);
+  return Array.from({ length: n }, () => row.slice());
+}
+
 function encodeRunLengthRepetition(n, val) {
   const res = [];
   while (n > 0x7f) { res.push(0x7f | (val << 7)); n -= 0x7f; }
