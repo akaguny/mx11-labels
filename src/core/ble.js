@@ -160,14 +160,21 @@ export class MxPrinter {
   async _write(data, onProgress) {
     if (!this.tx) throw new Error('принтер не подключён');
     const CHUNK = 128;
+    // Темп записи подобран под скорость потребления принтером: при 12 мс/пакет
+    // буфер MX11 захлёбывался на длинных сериях (3+ наклейки) — хвост задания
+    // (линия отреза + feed) терялся, наклейки сливались. 20 мс + пауза каждые
+    // 8 пакетов держат буфер принтера почти пустым даже для пачки из 10.
+    const PACKET_MS = 20;
+    const BREATHER_EVERY = 8;
+    const BREATHER_MS = 90;
     const total = Math.ceil(data.length / CHUNK);
     this.log(`Отправка ${data.length} байт (${total} пакетов по ${CHUNK}, ${this.canWriteNoResp ? 'без ответа' : 'с ответом'})`);
     for (let i = 0; i < total; i++) {
       const part = data.subarray(i * CHUNK, (i + 1) * CHUNK);
       if (this.canWriteNoResp) {
         await this.tx.writeValueWithoutResponse(part);
-        await sleep(12);
-        if (i % 16 === 15) await sleep(90); // даём буферу принтера освободиться
+        await sleep(PACKET_MS);
+        if (i % BREATHER_EVERY === BREATHER_EVERY - 1) await sleep(BREATHER_MS); // даём буферу принтера освободиться
       } else {
         await this.tx.writeValue(part);
       }

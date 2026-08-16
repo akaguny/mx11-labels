@@ -30,7 +30,10 @@ export class MxDebug extends Base {
   }
 
   log(msg) {
-    this._lines.push(String(msg));
+    const d = new Date();
+    const ts = [d.getHours(), d.getMinutes(), d.getSeconds()]
+      .map(x => String(x).padStart(2, '0')).join(':') + '.' + String(d.getMilliseconds()).padStart(3, '0');
+    this._lines.push(`[${ts}] ${msg}`);
     this._sync();
   }
 
