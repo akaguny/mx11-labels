@@ -3,7 +3,6 @@
 // и приложением, и node-скриптом tools/qr-fit.mjs. Текст ключа нигде не логируется.
 import qrcode from '../vendor/qrcode.js';
 import { PX_PER_MM, LABEL_MAX_MM } from './protocol.js';
-import { wrapText } from './label.js';
 
 // По умолчанию вендоренный генератор кодирует строку как Latin-1 (c & 0xff) —
 // кириллица превратилась бы в мусор. Для ASCII (QR наклеек) результат тот же.
@@ -16,10 +15,35 @@ export const QR_MIN_SIDE_MM = 20;
 export const QR_MAX_SIDE_MM = LABEL_MAX_MM;   // 48 мм — вся ширина печати
 export const QR_DEFAULT_SIDE_MM = 40;
 export const QR_MAX_CHARS = 2000;
-export const QR_MAX_CAPTION = 40;
+export const QR_MAX_CAPTION = 60;
 export const QR_GOOD_MODULE = 3;         // 3 точки = 0.375 мм — уверенное чтение
 export const QR_MIN_MODULE = 2;          // меньше — не читается
-const CAPTION_FS_MAX = 16, CAPTION_FS_MIN = 10, CAPTION_GAP = 4;
+export const QR_STRIP_MM = 6;            // вертикальная полоса подписи слева от QR
+export const QR_GAP_MM = 2;              // зазор между полосой и QR
+export const QR_STRIP_DOTS = QR_STRIP_MM * PX_PER_MM;   // 48
+export const QR_GAP_DOTS = QR_GAP_MM * PX_PER_MM;       // 16
+// Максимальная сторона QR при непустой подписи: 48 − 6 − 2 = 40 мм (иначе W > 384).
+export const QR_MAX_SIDE_CAPTION_MM = LABEL_MAX_MM - QR_STRIP_MM - QR_GAP_MM;
+const CAPTION_FS_MAX = 16, CAPTION_FS_MIN = 10, CAPTION_STRIP_MARGIN = 4;
+
+// Подпись: пробелы схлопываются, края обрезаются.
+export function normCaption(caption) {
+  return String(caption || '').replace(/\s+/g, ' ').trim();
+}
+
+// Эффективная сторона QR (мм): при непустой подписи не больше 40 мм. Поле ввода не трогаем.
+export function effectiveSide(sideMm, caption) {
+  const side = clampSide(sideMm);
+  return normCaption(caption) ? Math.min(side, QR_MAX_SIDE_CAPTION_MM) : side;
+}
+
+// Геометрия этикетки (точки), без DOM. stripDots — ширина полосы подписи (0 без подписи).
+// Без подписи W = H = сторона QR; с подписью W = сторона + полоса + зазор, H = сторона.
+export function qrKeyGeometry(qrSideDots, hasCaption) {
+  const stripDots = hasCaption ? QR_STRIP_DOTS : 0;
+  const gap = hasCaption ? QR_GAP_DOTS : 0;
+  return { W: qrSideDots + stripDots + gap, H: qrSideDots, stripDots, qrSideDots };
+}
 
 export function clampSide(v) {
   const n = Math.round(+v);
@@ -67,52 +91,56 @@ export function fitQr(text, sideMm) {
            n: pick.n, version: (pick.n - 17) / 4, modulePx: pick.modulePx, needMm: need };
 }
 
-// Подпись: кегль 16 → 10 px, ≤ 2 строк; если не влезает — одна строка с «…».
-function layoutCaption(ctx, caption, maxW) {
-  for (let fs = CAPTION_FS_MAX; fs >= CAPTION_FS_MIN; fs--) {
+// Подпись в вертикальной полосе: кегль 16 → 10 px, один ряд вдоль полосы (длина maxLen точек).
+// Максимальный кегль, при котором строка влезает по длине и по ширине полосы (fs ≤ полоса − 4);
+// не влезает и на 10 px — обрезаем с «…». Возвращает { fs, text, width }.
+export function layoutSideCaption(ctx, caption, maxLen, stripDots = QR_STRIP_DOTS) {
+  const fsMax = Math.min(CAPTION_FS_MAX, stripDots - CAPTION_STRIP_MARGIN);
+  for (let fs = fsMax; fs >= CAPTION_FS_MIN; fs--) {
     ctx.font = `bold ${fs}px Arial, sans-serif`;
-    const lines = wrapText(ctx, caption, maxW);
-    if (lines.length <= 2 && lines.every(l => ctx.measureText(l).width <= maxW)) {
-      return { fs, lines };
-    }
+    const width = ctx.measureText(caption).width;
+    if (width <= maxLen) return { fs, text: caption, width };
   }
   ctx.font = `bold ${CAPTION_FS_MIN}px Arial, sans-serif`;
   let line = caption;
-  while (line.length > 1 && ctx.measureText(line + '…').width > maxW) line = line.slice(0, -1);
-  return { fs: CAPTION_FS_MIN, lines: [line + '…'] };
+  while (line.length > 1 && ctx.measureText(line + '…').width > maxLen) line = line.slice(0, -1);
+  const text = line + '…';
+  return { fs: CAPTION_FS_MIN, text, width: ctx.measureText(text).width };
 }
 
 // Рисует этикетку на canvas: белый фон, модули fillRect без сглаживания, без рамки.
-// Если fit.ok = false — просто белый квадрат. Возвращает { W, H } в точках.
+// Подпись (если есть) — повёрнута на 90° в полосе слева от QR, читается снизу вверх.
+// Если fit.ok = false — просто белый холст. Возвращает { W, H, stripDots, qrSideDots }.
 export function renderQrKey(canvas, fit, caption = '') {
-  const W = fit.sideDots;
-  const cap = String(caption || '').replace(/\s+/g, ' ').trim();
-  let capLayout = null;
-  if (fit.ok && cap) {
-    canvas.width = W; canvas.height = W + 64;           // временный размер — только для measureText
-    capLayout = layoutCaption(canvas.getContext('2d', { willReadFrequently: true }), cap, W - 2 * QR_PAD);
-    capLayout.lh = Math.round(capLayout.fs * 1.15);
-  }
-  const H = W + (capLayout ? capLayout.lines.length * capLayout.lh + CAPTION_GAP : 0);
+  const cap = normCaption(caption);
+  const geo = qrKeyGeometry(fit.sideDots, !!cap);
+  const { W, H, stripDots, qrSideDots } = geo;
   canvas.width = W; canvas.height = H;                  // сбрасывает состояние контекста
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   ctx.imageSmoothingEnabled = false;
   ctx.fillStyle = '#fff';
   ctx.fillRect(0, 0, W, H);
-  if (!fit.ok) return { W, H };
+  if (!fit.ok) return geo;
 
   const { n, modulePx: m, qr } = fit;
-  const x0 = Math.floor((W - n * m) / 2), y0 = x0;
+  const qrX = W - qrSideDots;                           // левый край квадрата QR (после полосы и зазора)
+  const x0 = qrX + Math.floor((qrSideDots - n * m) / 2), y0 = Math.floor((qrSideDots - n * m) / 2);
   ctx.fillStyle = '#000';
   for (let r = 0; r < n; r++)
     for (let c = 0; c < n; c++)
       if (qr.isDark(r, c)) ctx.fillRect(x0 + c * m, y0 + r * m, m, m);
 
-  if (capLayout) {
-    ctx.font = `bold ${capLayout.fs}px Arial, sans-serif`;
-    ctx.textAlign = 'center'; ctx.textBaseline = 'top';
-    let y = W + CAPTION_GAP / 2;
-    for (const l of capLayout.lines) { ctx.fillText(l, W / 2, y); y += capLayout.lh; }
+  if (cap) {
+    const maxLen = H - 2 * QR_PAD;
+    const { fs, text, width } = layoutSideCaption(ctx, cap, maxLen, stripDots);
+    ctx.save();
+    ctx.translate(stripDots / 2, H);                    // начало — низ полосы, текст идёт вверх
+    ctx.rotate(-Math.PI / 2);
+    ctx.font = `bold ${fs}px Arial, sans-serif`;
+    ctx.fillStyle = '#000';
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    ctx.fillText(text, QR_PAD + (maxLen - width) / 2, 0);
+    ctx.restore();
   }
-  return { W, H };
+  return geo;
 }

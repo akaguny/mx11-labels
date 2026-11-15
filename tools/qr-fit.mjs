@@ -5,7 +5,8 @@
 //                                              (exit 0 — помещается, 1 — нет); текст не печатается
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { fitQr, QR_MAX_CHARS } from '../src/core/qrkey.js';
+import { fitQr, qrKeyGeometry, effectiveSide, normCaption, layoutSideCaption, QR_MAX_CHARS, QR_MAX_CAPTION,
+         QR_STRIP_DOTS, QR_GAP_DOTS, QR_MAX_SIDE_CAPTION_MM, QR_PAD } from '../src/core/qrkey.js';
 import { buildPrintJob, CMD_GET_STATUS, PRINT_WIDTH } from '../src/core/protocol.js';
 
 const summary = (text, sideMm) => {
@@ -90,6 +91,48 @@ for (const [name, text, side, exp] of cases) {
   const tight = fitQr(rnd(600), 20);
   check('reason needMm при тесной стороне', !tight.ok && tight.reason === 'needMm' && tight.needMm > 20 && tight.needMm <= 48,
     `(needMm=${tight.needMm})`);
+}
+
+console.log('\n== геометрия этикетки с подписью (qrKeyGeometry / layoutSideCaption) ==');
+{
+  check('константы: полоса 48 точек, зазор 16, макс. сторона с подписью 40 мм',
+    QR_STRIP_DOTS === 48 && QR_GAP_DOTS === 16 && QR_MAX_SIDE_CAPTION_MM === 40 && QR_PAD === 8);
+  check(`подпись до ${QR_MAX_CAPTION} симв. (=60)`, QR_MAX_CAPTION === 60);
+  let geoOk = true, noCapOk = true, effOk = true;
+  for (let mm = 20; mm <= 48; mm++) {
+    const d = mm * 8;
+    const g = qrKeyGeometry(d, true), n = qrKeyGeometry(d, false);
+    geoOk = geoOk && g.W === d + 48 + 16 && g.H === d && g.stripDots === 48 && g.qrSideDots === d;
+    noCapOk = noCapOk && n.W === d && n.H === d && n.stripDots === 0;
+    // вызывающий код ограничивает сторону 40 мм → W ≤ 384 при любом выбранном значении 20..48
+    const e = effectiveSide(mm, 'x');
+    effOk = effOk && e === Math.min(mm, 40) && qrKeyGeometry(e * 8, true).W <= 384 && effectiveSide(mm, '  \n ') === mm;
+  }
+  check('с подписью: W = side + 48 + 16, H = side (стороны 20..48)', geoOk);
+  check('без подписи: W = H = side', noCapOk);
+  check('effectiveSide: min(сторона, 40) при подписи, W ≤ 384; пустая/пробельная подпись — без ограничения', effOk);
+  check('на 40 мм с подписью W = 384 ровно', qrKeyGeometry(320, true).W === 384);
+  check('normCaption схлопывает пробелы', normCaption('  a \t b\n c ') === 'a b c');
+  // fitQr не зависит от подписи: подбор версии/EC/модуля тот же
+  const f40 = fitQr(rnd(200), effectiveSide(48, 'cap'));
+  check('fitQr с эффективной стороной 40: sideMm = 40, sideDots = 320', f40.ok && f40.sideMm === 40 && f40.sideDots === 320);
+
+  // Подпись без canvas: мок ctx с measureText (ширина ∝ кегль × число символов). Проверяем кегль и границы.
+  const mk = () => ({ font: '', measureText(s) { const fs = +/(\d+)px/.exec(this.font)[1]; return { width: s.length * fs * 0.6 }; } });
+  const maxLen = 40 * 8 - 2 * QR_PAD;                       // H − 2·PAD для QR 40 мм = 304
+  let capOk = true, detail = '';
+  for (const len of [1, 5, 20, 30, 40, 50, 60]) {
+    const lay = layoutSideCaption(mk(), 'W'.repeat(len), maxLen);
+    const inside = lay.width <= maxLen && lay.fs <= QR_STRIP_DOTS - 4 && lay.fs >= 10 && lay.fs <= 16;
+    const wantEll = len * 10 * 0.6 > maxLen;                // не влезает даже на 10 px
+    const gotEll = lay.text.endsWith('…');
+    const maxFs = lay.fs === 16 || (lay.fs < 16 && len * (lay.fs + 1) * 0.6 > maxLen);   // кегль максимальный
+    if (!(inside && gotEll === wantEll && maxFs)) { capOk = false; detail += ` len=${len}:fs=${lay.fs},w=${lay.width},ell=${gotEll}`; }
+  }
+  check('подпись: кегль 16→10, влезает по длине H−2·PAD и в полосу, «…» только если не влезла на 10 px', capOk, detail);
+  const short = layoutSideCaption(mk(), 'abc', maxLen), long = layoutSideCaption(mk(), 'W'.repeat(60), maxLen);
+  check('подпись: короткая — 16 px без «…»; 60 символов при 10 px — с «…» в пределах длины',
+    short.fs === 16 && short.text === 'abc' && long.fs === 10 && long.text.endsWith('…') && long.width <= maxLen);
 }
 
 console.log('\n== buildPrintJob: структура кадров ==');

@@ -2,8 +2,8 @@
 // Значения полей живут только в памяти этого элемента: не сохраняются, не логируются,
 // не уходят в события (наружу — только флаг canPrint). Печатью управляет mx-actions.
 import { t } from '../core/i18n.js';
-import { fitQr, renderQrKey, clampSide, QR_MAX_CHARS, QR_MAX_CAPTION,
-         QR_DEFAULT_SIDE_MM, QR_MIN_SIDE_MM, QR_MAX_SIDE_MM } from '../core/qrkey.js';
+import { fitQr, renderQrKey, clampSide, effectiveSide, QR_MAX_CHARS, QR_MAX_CAPTION,
+         QR_DEFAULT_SIDE_MM, QR_MIN_SIDE_MM, QR_MAX_SIDE_MM, QR_MAX_SIDE_CAPTION_MM } from '../core/qrkey.js';
 import { PX_PER_MM } from '../core/protocol.js';
 import { esc, emit, Base, defineEl } from './util.js';
 
@@ -74,7 +74,7 @@ export class MxQrKey extends Base {
         .sidebox { display:flex; gap:8px; align-items:flex-end; }
         .sidebox label { flex:1; margin-bottom:0; }
         .presets { display:flex; gap:6px; }
-        .info { font-size:13px; margin:10px 0 6px; color:var(--mx-text,#111827); min-height:18px; }
+        .info { font-size:13px; margin:10px 0 6px; white-space:pre-line; color:var(--mx-text,#111827); min-height:18px; }
         .note { font-size:12px; border-radius:8px; padding:7px 9px; margin:6px 0; }
         .warn { background:#fef3c7; color:#92400e; }
         .err { background:#fee2e2; color:#991b1b; }
@@ -162,23 +162,26 @@ export class MxQrKey extends Base {
     if (!this._dirty || !this._ta) return;
     clearTimeout(this._timer);
     this._dirty = false;
-    const f = this._fit = fitQr(this._text, this._side);
+    this._side = clampSide(this._side);          // поле ввода не перезаписываем — выбранная сторона запоминается
+    const eff = effectiveSide(this._side, this._caption);
+    const capped = eff < this._side;
+    const f = this._fit = fitQr(this._text, eff);
     this._count.textContent = t('qrCount', this._text.length, QR_MAX_CHARS);
     this._count.classList.toggle('over', this._text.length >= QR_MAX_CHARS);
-    this._side = f.sideMm;
     this._warn.hidden = !(f.ok && f.warn);
     this._warn.textContent = f.ok && f.warn ? t('qrWarnModule2') : '';
     const blocked = !f.ok && f.reason !== 'empty';
     this._err.hidden = !blocked;
     this._err.textContent = !blocked ? ''
       : f.reason === 'needMm' ? t('qrErrNeed', f.sideMm, f.needMm) : t('qrErrTooMuch');
-    for (const b of this.shadowRoot.querySelectorAll('.preset')) b.classList.toggle('on', +b.dataset.v === f.sideMm);
+    for (const b of this.shadowRoot.querySelectorAll('.preset')) b.classList.toggle('on', +b.dataset.v === this._side);
+    const hint = capped ? t('qrSideCapped', QR_MAX_SIDE_CAPTION_MM) : '';
+    let info = '';
     if (f.ok) {
       const { W, H } = renderQrKey(this._canvas, f, this._caption);
-      this._info.textContent = t('qrInfo', f.version, f.ec, f.modulePx, +(W / PX_PER_MM).toFixed(1), +(H / PX_PER_MM).toFixed(1));
-    } else {
-      this._info.textContent = '';
+      info = t('qrInfo', f.version, f.ec, f.modulePx, +(W / PX_PER_MM).toFixed(1), +(H / PX_PER_MM).toFixed(1));
     }
+    this._info.textContent = [info, hint].filter(Boolean).join('\n');
     this._pv.hidden = !f.ok;
     emit(this, 'mx:qrstate', { canPrint: !!(f.ok && this._text.trim()) });   // без содержимого полей
   }

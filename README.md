@@ -23,9 +23,10 @@ A static, installable PWA hosted on GitHub Pages. Built with vanilla Web Compone
 
 ## QR key mode
 
-Switch to the **QR key** tab to print a QR code that encodes an arbitrary string — a recovery key, a seed phrase, any text (UTF-8, Cyrillic and line breaks are fine, up to 2000 characters), with an optional caption (up to 40 characters) printed under it.
+Switch to the **QR key** tab to print a QR code that encodes an arbitrary string — a recovery key, a seed phrase, any text (UTF-8, Cyrillic and line breaks are fine, up to 2000 characters), with an optional caption (up to 60 characters).
 
-- **Size** — the QR is a square with a side of 20–48 mm (presets 30 / 40 / 48 mm, default 40 mm), printed across the tape.
+- **Size** — the QR is a square with a side of 20–48 mm (presets 30 / 40 / 48 mm, default 40 mm), printed across the tape. Without a caption the label is exactly the QR square.
+- **Caption** — printed rotated by 90° (reads bottom-to-top, like a book spine) in a vertical 6 mm strip to the left of the QR, with a 2 mm gap; the label height stays equal to the QR side, so no tape is wasted lengthwise. The font is 16→10 px, shrunk to fit the strip length, with `…` if it still does not fit. With a non-empty caption the QR side is capped at 40 mm (48 − 6 − 2) and the panel says so; the side field keeps your value and it is restored when the caption is cleared.
 - **Auto-fit** — error-correction levels are tried in the order H → Q → M → L; the first one that gives a module of at least 3 dots (0.375 mm) wins. A 2-dot module is allowed with a yellow warning; if even that does not fit, printing is blocked and the app tells you the minimum side in mm (or that the text must be shortened). The panel shows `version · EC · module px · label size`.
 - **Printing** — copies (1–5), density and the tear feed come from the common settings. After a **successful** print the data and caption fields are cleared automatically. *Download PNG* saves `qr-key.png`.
 - **The key is not stored by the app and is not sent over the network.** It lives only in the page memory: nothing is written to localStorage/sessionStorage/IndexedDB, the URL, the catalog, the history or the debug report, no history event is emitted, and the QR is generated locally by the vendored `src/vendor/qrcode.js`. The only thing remembered about this mode is which tab was last open.
