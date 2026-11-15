@@ -24,6 +24,15 @@ export class MxSettings extends Base {
   }
   disconnectedCallback() { if (this._onLang) document.removeEventListener('mx:lang', this._onLang); }
 
+  // Режим «QR-ключ» (атрибут mode="qr"): прячет настройки наклеек, копий не больше 5.
+  static get observedAttributes() { return ['mode']; }
+  attributeChangedCallback() { if (this._copies) this._applyMode(); }
+  get _maxCopies() { return this.getAttribute('mode') === 'qr' ? 5 : 10; }
+  _applyMode() {
+    this._copies.max = this._maxCopies;
+    if (+this._copies.value > this._maxCopies) { this._copies.value = this._maxCopies; this._emit(); }
+  }
+
   _bindLang() {
     this._onLang = () => this.refresh();
     document.addEventListener('mx:lang', this._onLang);
@@ -59,20 +68,21 @@ export class MxSettings extends Base {
         .row { display:flex; gap:10px; }
         .row label { flex:1; }
         .eng { font-weight:600; color:var(--mx-text,#111827); }
+        :host([mode=qr]) .lo { display:none; }
       </style>
-      <label>${t('preset')}
+      <label class="lo">${t('preset')}
         <select class="preset">
           ${PRESET_KEYS.map(k => `<option value="${k}">${t('preset' + (k === 'custom' ? 'Custom' : k))}</option>`).join('')}
         </select>
       </label>
-      <label>${t('orient')}
+      <label class="lo">${t('orient')}
         <select class="orient">
           <option value="auto">${t('orientAuto')}</option>
           <option value="across">${t('orientAcross')}</option>
           <option value="along">${t('orientAlong')}</option>
         </select>
       </label>
-      <div class="row">
+      <div class="row lo">
         <label>${t('widthMm', lay.maxWmm)}
           <input type="number" class="wmm" min="20" max="${lay.maxWmm}" step="0.5">
         </label>
@@ -80,7 +90,7 @@ export class MxSettings extends Base {
           <input type="number" class="hmm" min="8" max="${lay.maxHmm}" step="0.5">
         </label>
       </div>
-      <label>${t('offsetMm')}
+      <label class="lo">${t('offsetMm')}
         <input type="number" class="off" min="0" max="20" step="0.5">
       </label>
       <div class="row">
@@ -95,7 +105,7 @@ export class MxSettings extends Base {
         <input type="range" class="energy" min="30" max="100" step="1">
         <span class="eng"></span>%
       </label>
-      <label class="border"><input type="checkbox" class="borderchk"> ${t('border')}</label>
+      <label class="border lo"><input type="checkbox" class="borderchk"> ${t('border')}</label>
     `;
     this._preset = this.shadowRoot.querySelector('.preset');
     this._orient = this.shadowRoot.querySelector('.orient');
@@ -108,6 +118,7 @@ export class MxSettings extends Base {
     this._energyOut = this.shadowRoot.querySelector('.eng');
     this._border = this.shadowRoot.querySelector('.borderchk');
     this._sync();
+    this._applyMode();
     this._preset.addEventListener('change', () => this._applyPreset());
     this._orient.addEventListener('change', () => { this._updateMax(); this._emit(); });
     for (const el of [this._wmm, this._hmm]) {
@@ -159,7 +170,7 @@ export class MxSettings extends Base {
       wmm: +this._wmm.value || 67,
       hmm: +this._hmm.value || 15,
       offmm: +this._off.value || 0,
-      copies: clamp(+this._copies.value || 1, 1, 10),
+      copies: clamp(+this._copies.value || 1, 1, this._maxCopies),
       tear: clamp(+this._tear.value || 0, 0, 25),
       energy: clamp(+this._energy.value || 100, 30, 100),
       border: this._border.checked,

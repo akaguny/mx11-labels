@@ -1,5 +1,5 @@
 /* mx11-labels service worker — cache-first для статики, network-first для навигации */
-const VERSION = 'mx11-v7';
+const VERSION = 'mx11-v8';
 const CACHE = VERSION;
 
 const PRECACHE = [
@@ -14,6 +14,7 @@ const PRECACHE = [
   './src/core/i18n.js',
   './src/core/label.js',
   './src/core/protocol.js',
+  './src/core/qrkey.js',
   './src/core/store.js',
   './src/components/mx-actions.js',
   './src/components/mx-app.js',
@@ -24,6 +25,7 @@ const PRECACHE = [
   './src/components/mx-filament.js',
   './src/components/mx-preflight.js',
   './src/components/mx-preview.js',
+  './src/components/mx-qrkey.js',
   './src/components/mx-settings.js',
   './src/components/util.js'
 ];

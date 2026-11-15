@@ -12,6 +12,7 @@ import './mx-preflight.js';
 import './mx-calibration.js';
 import './mx-debug.js';
 import './mx-catalog.js';
+import './mx-qrkey.js';
 
 export class MxApp extends Base {
   constructor() {
@@ -48,6 +49,11 @@ export class MxApp extends Base {
                 border-radius:9px; padding:7px 11px; cursor:pointer; font:inherit; font-size:13px;
                 color:var(--mx-text,#111827); flex:none; margin-top:4px; }
         .lang:hover { border-color:var(--mx-accent,#16a34a); color:var(--mx-accent,#16a34a); }
+        .tabs { display:flex; gap:6px; margin:10px 0 0; }
+        .tab { flex:1; padding:9px 12px; border:1px solid var(--mx-border,#e5e7eb);
+               background:var(--mx-card-bg,#fff); border-radius:9px; cursor:pointer; font:inherit;
+               font-size:14px; color:var(--mx-text,#111827); }
+        .tab.on { background:var(--mx-accent,#16a34a); border-color:var(--mx-accent,#16a34a); color:#fff; }
         .howto { background:var(--mx-card-bg,#fff); border-radius:var(--mx-radius,14px);
                  padding:14px; margin:10px 0; box-shadow:0 1px 2px rgba(0,0,0,.06); }
         .howto summary { font-size:15px; cursor:pointer; }
@@ -62,7 +68,12 @@ export class MxApp extends Base {
         </div>
         <button class="lang">${t('langName')}</button>
       </header>
+      <div class="tabs" role="group" aria-label="${esc(t('modeTabs'))}">
+        <button class="tab" data-mode="labels" type="button">${esc(t('modeLabels'))}</button>
+        <button class="tab" data-mode="qr" type="button">${esc(t('modeQr'))}</button>
+      </div>
       <main>
+        <mx-qrkey></mx-qrkey>
         <mx-batch></mx-batch>
         <mx-filament></mx-filament>
         <mx-preview></mx-preview>
@@ -89,6 +100,8 @@ export class MxApp extends Base {
     this._cal = this.shadowRoot.querySelector('mx-calibration');
     this._debug = this.shadowRoot.querySelector('mx-debug');
     this._c = this.shadowRoot.querySelector('mx-catalog');
+    this._q = this.shadowRoot.querySelector('mx-qrkey');
+    this._tabs = this.shadowRoot.querySelectorAll('.tab');
   }
 
   _wire() {
@@ -102,6 +115,8 @@ export class MxApp extends Base {
     this._s.addEventListener('mx:settings', e => this._onSettings(e));
     this._cal.addEventListener('mx:settings', e => this._onSettings(e));
     this._a.addEventListener('mx:history', e => this._onHistory(e.detail));
+    this._q.addEventListener('mx:qrstate', () => this._a.syncState());
+    this._tabs.forEach(b => b.addEventListener('click', () => this._setMode(b.dataset.mode)));
     this._a.addEventListener('mx:printerState', e => this._onPrinterState(e.detail));
     this._c.addEventListener('mx:printAgain', e => this._onPrintAgain(e.detail.item));
   }
@@ -121,6 +136,31 @@ export class MxApp extends Base {
     this._a.filament = this._filament;
     this._cal.settings = this._settings;
     this._pre.connected = this._printer.isConnected;
+    this._a.qrKey = this._q;
+    this._applyMode();
+  }
+
+  // Режим «Наклейки» / «QR-ключ». В настройках хранится только имя режима.
+  _setMode(mode) {
+    const m = mode === 'qr' ? 'qr' : 'labels';
+    if (m === this._settings.mode) return;
+    this._onSettings({ detail: { settings: { mode: m } } });
+    this._applyMode();
+  }
+
+  _applyMode() {
+    const qr = this._settings.mode === 'qr';
+    // inline display: у компонентов :host { display:block } перебивает атрибут hidden
+    const show = (el, on) => { el.style.display = on ? '' : 'none'; };
+    [this._b, this._f, this._p, this._cal, this._c].forEach(el => show(el, !qr));
+    show(this._q, qr);
+    this._s.setAttribute('mode', qr ? 'qr' : 'labels');
+    this._a.mode = qr ? 'qr' : 'labels';
+    this._tabs.forEach(b => {
+      const on = b.dataset.mode === (qr ? 'qr' : 'labels');
+      b.classList.toggle('on', on);
+      b.setAttribute('aria-pressed', String(on));
+    });
   }
 
   _toggleLang() {
@@ -128,6 +168,7 @@ export class MxApp extends Base {
     this.shadowRoot.querySelector('h1').textContent = t('appTitle');
     this.shadowRoot.querySelector('.sub').textContent = t('appSub');
     this._langBtn.textContent = t('langName');
+    this._tabs.forEach(b => { b.textContent = t(b.dataset.mode === 'qr' ? 'modeQr' : 'modeLabels'); });
     this._howto.innerHTML = `<summary>ℹ️ ${t('howTo')}</summary>
       <ol>${t('howToItems').map(i => `<li>${esc(i)}</li>`).join('')}</ol>`;
     if (typeof document !== 'undefined') {

@@ -16,6 +16,8 @@ export class MxActions extends Base {
     this._statusText = '';
     this._busy = false;
     this._statusBound = false;
+    this._mode = 'labels';
+    this._qrKey = null;
   }
 
   connectedCallback() {
@@ -34,6 +36,11 @@ export class MxActions extends Base {
 
   get settings() { return this._settings; }
   set settings(v) { this._settings = { ...(this._settings), ...(v || {}) }; if (this.shadowRoot) this._syncDisabled(); }
+  get mode() { return this._mode; }
+  set mode(v) { this._mode = v === 'qr' ? 'qr' : 'labels'; if (this.shadowRoot) this._syncDisabled(); }
+  get qrKey() { return this._qrKey; }
+  set qrKey(el) { this._qrKey = el; }
+  syncState() { if (this.shadowRoot) this._syncDisabled(); }
   get queue() { return this._queue; }
   set queue(v) { this._queue = Array.isArray(v) ? v : []; }
   get filament() { return this._filament; }
@@ -119,9 +126,10 @@ export class MxActions extends Base {
   _syncDisabled() {
     if (!this._connectBtn) return;
     const conn = !!(this._printer && this._printer.isConnected);
-    this._printBtn.disabled = !conn || this._busy;
+    const qrBlocked = this._mode === 'qr' && !(this._qrKey && this._qrKey.canPrint);
+    this._printBtn.disabled = !conn || this._busy || qrBlocked;
     this._feedBtn.disabled = !conn || this._busy;
-    this._pngBtn.disabled = this._busy;
+    this._pngBtn.disabled = this._busy || qrBlocked;
     this._connectBtn.disabled = this._busy;
     this._findBtn.disabled = this._busy;
   }
@@ -157,6 +165,7 @@ export class MxActions extends Base {
   }
 
   async doPrint() {
+    if (this._mode === 'qr') return this.printQr();
     if (!this._printer || !this._printer.isConnected) { this._setStatus(t('printerDisconnected'), true); return; }
     const s = this._settings || {};
     const energy = clamp(+s.energy || 100, 30, 100);
@@ -278,7 +287,45 @@ export class MxActions extends Base {
     return canvasToRows(c, s.orient, s.offmm);
   }
 
+  // Режим «QR-ключ»: растр строится из актуального canvas, копии — отдельными заданиями
+  // (между ними линия отреза, feed = 1), последняя — с финальной протяжкой. Текст не логируется.
+  async printQr() {
+    if (!this._printer || !this._printer.isConnected) { this._setStatus(t('printerDisconnected'), true); return; }
+    const q = this._qrKey;
+    const canvas = q && q.prepare();
+    if (!canvas) { this._syncDisabled(); return; }
+    const s = this._settings || {};
+    const energy = clamp(+s.energy || 100, 30, 100);
+    const copies = clamp(+s.copies || 1, 1, 5);
+    const finalFeed = Math.max(1, Math.round((+s.tear || 0) * PX_PER_MM));
+    const rows = canvasToRows(canvas, 'across', 0);
+    const jobs = [];
+    for (let c = 0; c < copies; c++) {
+      const last = c === copies - 1;
+      jobs.push(buildPrintJob(last ? rows : [...rows, ...cutMarkRows()], energy, last ? finalFeed : 1, last));
+    }
+    this._log(`QR key print: ${copies} copies, ${rows.length} rows`);
+    const ok = await this._send(jobs, copies, rows.length + (copies > 1 ? 2 : 0));
+    if (ok) {
+      q.clear();
+      this._setStatus(t('qrPrintedCleared'));
+      this._syncDisabled();
+    }
+  }
+
+  downloadQrPng() {
+    const canvas = this._qrKey && this._qrKey.prepare();
+    if (!canvas) return;
+    const a = document.createElement('a');
+    a.download = 'qr-key.png';
+    a.href = canvas.toDataURL('image/png');
+    a.click();
+    this._log('QR key PNG downloaded');
+  }
+
+  // bytes — одно задание (Uint8Array) или массив заданий, печатаемых подряд с паузой 2 с.
   _send(bytes, total, rowsPerCopy) {
+    const jobs = Array.isArray(bytes) ? bytes : [bytes];
     this._setStatus(t('printingN', 1, total));
     this._setBusy(true);
     if (this._progress) this._progress.value = 0;
@@ -289,7 +336,13 @@ export class MxActions extends Base {
     const timer = setInterval(() => {
       if (this._progress) this._progress.value = Math.min(99.5, Math.round((Date.now() - startedAt) / printMs * 1000) / 10);
     }, 500);
-    return this._printer.print(bytes)
+    const run = async () => {
+      for (let i = 0; i < jobs.length; i++) {
+        if (i > 0) { await sleep(2000); this._setStatus(t('printingN', i + 1, total)); }
+        await this._printer.print(jobs[i]);
+      }
+    };
+    return run()
       .then(async () => {
         // даём принтеру допечатать хвост (буфер + финальная протяжка)
         const remain = printMs + 1000 - (Date.now() - startedAt);
@@ -311,6 +364,7 @@ export class MxActions extends Base {
   }
 
   downloadPng() {
+    if (this._mode === 'qr') return this.downloadQrPng();
     const s = this._settings || {};
     const q = this._queue || [];
     if (q.length) {

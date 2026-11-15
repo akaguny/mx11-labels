@@ -19,6 +19,7 @@ export const DEFAULT_SETTINGS = {
   border: true,
   bigPreview: false,
   cal: 100,               // калибровка, %
+  mode: 'labels',         // 'labels' | 'qr' — единственное, что сохраняется из режима «QR-ключ»
 };
 
 function read(key, fallback) {
